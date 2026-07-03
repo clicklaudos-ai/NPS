@@ -9,7 +9,7 @@ import {
   Link2, Copy, Check, Send, BarChart3, MessageSquare, Calendar,
   Sparkles, ArrowLeft, ClipboardList, Users, TrendingUp, TrendingDown,
   Search, ExternalLink, AlertCircle, ThumbsUp, Clock, Zap, Frown,
-  Settings2, Pencil, Trash2, X
+  Settings2, Pencil, Trash2, X, Lock
 } from 'lucide-react';
 import {
   fetchAll, insertLink, insertResponse, insertAtendente,
@@ -921,9 +921,68 @@ function EmptyState({ text }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Tela inicial protegida por senha                                     */
+/* Obs.: os links de pesquisa (/avaliar) enviados ao cliente final NÃO   */
+/* passam por essa tela — só a aplicação interna exige senha.           */
+/* ------------------------------------------------------------------ */
+const SENHA_APP = '9171';
+const CHAVE_SESSAO = 'clicklaudos_autenticado';
+
+function PasswordGate({ onUnlock }) {
+  const [senha, setSenha] = useState('');
+  const [erro, setErro] = useState(false);
+
+  const entrar = (e) => {
+    e.preventDefault();
+    if (senha === SENHA_APP) {
+      try { sessionStorage.setItem(CHAVE_SESSAO, '1'); } catch (err) {}
+      onUnlock();
+    } else {
+      setErro(true);
+      setSenha('');
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4" style={{ background: C.bg }}>
+      <div className="w-full max-w-sm">
+        <div className="flex justify-center mb-6"><ClickLaudosLogo size="md" showTag={false} /></div>
+        <form onSubmit={entrar} className="rounded-2xl border p-6 shadow-sm" style={{ background: C.card, borderColor: C.border }}>
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center mb-3" style={{ background: C.blueSoft }}>
+            <Lock size={19} style={{ color: C.navy2 }} />
+          </div>
+          <h1 className="text-lg font-extrabold mb-1" style={{ color: C.ink }}>Acesso restrito</h1>
+          <p className="text-sm mb-4" style={{ color: C.sub }}>Digite a senha para acessar o painel interno.</p>
+          <input
+            type="password"
+            inputMode="numeric"
+            value={senha}
+            onChange={(e) => { setSenha(e.target.value); setErro(false); }}
+            autoFocus
+            placeholder="Senha"
+            className="w-full px-3.5 py-2.5 rounded-xl border text-sm outline-none focus:ring-2 mb-2"
+            style={{ borderColor: erro ? C.red : C.border, background: C.bg }}
+          />
+          {erro && (
+            <div className="flex items-center gap-1.5 text-xs font-semibold mb-3" style={{ color: C.red }}>
+              <AlertCircle size={13} /> Senha incorreta. Tente novamente.
+            </div>
+          )}
+          <button type="submit" className="w-full py-2.5 rounded-xl font-bold text-sm" style={{ background: C.navy, color: '#fff' }}>
+            Entrar
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* App                                                                   */
 /* ------------------------------------------------------------------ */
 export default function App() {
+  const [verificandoAuth, setVerificandoAuth] = useState(true);
+  const [autenticado, setAutenticado] = useState(false);
   const [responses, setResponses] = useState([]);
   const [links, setLinks] = useState([]);
   const [atendentes, setAtendentes] = useState([]);
@@ -933,6 +992,14 @@ export default function App() {
   const [view, setView] = useState('suporte');
   const [pendingSurvey, setPendingSurvey] = useState(null);
   const [demoTipo, setDemoTipo] = useState('csat');
+
+  // Verifica se já foi autenticado nesta aba (sessionStorage) antes de liberar a tela.
+  useEffect(() => {
+    let jaAutenticado = false;
+    try { jaAutenticado = sessionStorage.getItem(CHAVE_SESSAO) === '1'; } catch (err) {}
+    setAutenticado(jaAutenticado);
+    setVerificandoAuth(false);
+  }, []);
 
   const carregarTudo = async () => {
     try {
@@ -949,15 +1016,16 @@ export default function App() {
     }
   };
 
-  // Carga inicial
-  useEffect(() => { carregarTudo(); }, []);
+  // Carga inicial (só depois de autenticado)
+  useEffect(() => { if (autenticado) carregarTudo(); }, [autenticado]);
 
   // Realtime: qualquer mudança feita por outro usuário (ex.: cliente respondendo
   // a pesquisa em outra aba/dispositivo) atualiza o Dashboard na hora.
   useEffect(() => {
+    if (!autenticado) return;
     const unsubscribe = subscribeRealtime(() => { carregarTudo(); });
     return unsubscribe;
-  }, []);
+  }, [autenticado]);
 
   const addLink = async (novo) => {
     setSincronizando(true);
@@ -1044,6 +1112,14 @@ export default function App() {
   };
 
   const survey = pendingSurvey || { id: 'demo', cliente: 'Cliente Demonstração', atendente: atendentes[0]?.nome || 'Atendente Demonstração', tipo: demoTipo };
+
+  if (verificandoAuth) {
+    return <div className="min-h-screen" style={{ background: C.bg }} />;
+  }
+
+  if (!autenticado) {
+    return <PasswordGate onUnlock={() => setAutenticado(true)} />;
+  }
 
   if (!loaded) {
     return (
