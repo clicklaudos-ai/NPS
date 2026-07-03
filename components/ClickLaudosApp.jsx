@@ -6,7 +6,7 @@ import {
   PieChart, Pie, Cell, Legend
 } from 'recharts';
 import {
-  Activity, Link2, Copy, Check, Send, BarChart3, MessageSquare, Calendar,
+  Link2, Copy, Check, Send, BarChart3, MessageSquare, Calendar,
   Sparkles, ArrowLeft, ClipboardList, Users, TrendingUp, TrendingDown,
   Search, ExternalLink, AlertCircle, ThumbsUp, Clock, Zap, Frown,
   Settings2, Pencil, Trash2, X
@@ -45,12 +45,12 @@ function ClickLaudosLogo({ size = 'md', showTag = true }) {
   const h = size === 'lg' ? 34 : size === 'sm' ? 18 : 24;
   return (
     <div className="flex items-center gap-2.5">
-      <div
-        className="rounded-full flex items-center justify-center shrink-0"
-        style={{ width: h + 16, height: h + 16, background: `linear-gradient(135deg, ${C.navy}, ${C.blue})` }}
-      >
-        <Activity size={h * 0.62} color="#fff" strokeWidth={2.5} />
-      </div>
+      <img
+        src="/logo.jpg"
+        alt="Click Laudos"
+        className="rounded-xl shrink-0 object-cover"
+        style={{ width: h + 16, height: h + 16 }}
+      />
       <div>
         <div style={{ fontSize: h, lineHeight: 1, letterSpacing: '-0.02em' }} className="font-extrabold">
           <span style={{ color: C.navy }}>Click</span>
@@ -217,8 +217,9 @@ function SuporteView({ addLink, goToCliente, atendentes, addAtendente, editAtend
     if (!podeGerar || gerando) return;
     setGerando(true);
     const atendente = atendentes.find((a) => a.id === atendenteId);
-    const idFicticio = Math.floor(1000 + Math.random() * 8999);
-    const novo = { cliente: nome.trim(), atendente: atendente ? atendente.nome : '—', tipo, url: `clicklaudos.com.br/avaliar?id=${idFicticio}&tipo=${tipo}` };
+    const id = crypto.randomUUID();
+    const url = `${window.location.origin}/avaliar?id=${id}`;
+    const novo = { id, cliente: nome.trim(), atendente: atendente ? atendente.nome : '—', tipo, url };
     const criado = await addLink(novo);
     if (criado) {
       setLinkGerado(criado);
@@ -242,7 +243,7 @@ function SuporteView({ addLink, goToCliente, atendentes, addAtendente, editAtend
   };
 
   const copiarLink = async () => {
-    const texto = 'https://' + linkGerado.url;
+    const texto = linkGerado.url;
     let sucesso = false;
 
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -407,26 +408,32 @@ function ClienteView({ survey, onSubmit, onBack, onChangeDemoTipo }) {
   const [nota, setNota] = useState(null);
   const [comentario, setComentario] = useState('');
   const [enviado, setEnviado] = useState(false);
+  const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState('');
 
   const isCsat = survey.tipo === 'csat';
   const isDemo = survey.id === 'demo';
   const comentarioObrigatorio = !isCsat && nota !== null && nota <= 6;
 
-  const enviar = () => {
+  const enviar = async () => {
     if (nota === null) { setErro('Selecione uma nota antes de enviar.'); return; }
     if (comentarioObrigatorio && comentario.trim() === '') { setErro('Conte pra gente o motivo da nota.'); return; }
     setErro('');
-    onSubmit({
-      id: 'resp-' + Date.now(),
-      cliente: survey.cliente,
-      atendente: survey.atendente,
-      tipo: survey.tipo,
-      nota,
-      comentario: comentario.trim(),
-      data: new Date().toISOString(),
-    });
-    setEnviado(true);
+    setEnviando(true);
+    try {
+      await onSubmit({
+        cliente: survey.cliente,
+        atendente: survey.atendente,
+        tipo: survey.tipo,
+        nota,
+        comentario: comentario.trim(),
+      });
+      setEnviado(true);
+    } catch (e) {
+      setErro('Não foi possível enviar sua avaliação. Tente novamente.');
+    } finally {
+      setEnviando(false);
+    }
   };
 
   return (
@@ -452,7 +459,7 @@ function ClienteView({ survey, onSubmit, onBack, onChangeDemoTipo }) {
                 </div>
               )}
               <div className="text-xs font-semibold mb-1" style={{ color: C.sub }}>
-                {survey.cliente} • Atendido por {survey.atendente}
+                {isCsat ? `${survey.cliente} • Atendido por ${survey.atendente}` : survey.cliente}
               </div>
               <h1 className="text-lg font-extrabold leading-snug mb-6" style={{ color: C.ink }}>
                 {isCsat
@@ -507,9 +514,9 @@ function ClienteView({ survey, onSubmit, onBack, onChangeDemoTipo }) {
                 </div>
               )}
 
-              <button onClick={enviar} className="w-full mt-5 py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2"
-                style={{ background: C.navy, color: '#fff' }}>
-                <Send size={16} /> Enviar avaliação
+              <button onClick={enviar} disabled={enviando} className="w-full mt-5 py-3.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2"
+                style={{ background: C.navy, color: '#fff', opacity: enviando ? 0.7 : 1, cursor: enviando ? 'not-allowed' : 'pointer' }}>
+                <Send size={16} /> {enviando ? 'Enviando...' : 'Enviar avaliação'}
               </button>
             </>
           ) : (
@@ -519,13 +526,15 @@ function ClienteView({ survey, onSubmit, onBack, onChangeDemoTipo }) {
               </div>
               <h2 className="text-xl font-extrabold mb-1.5" style={{ color: C.ink }}>Obrigado por nos ajudar a melhorar!</h2>
               <p className="text-sm" style={{ color: C.sub }}>Sua resposta foi registrada e já está refletida no painel do gestor.</p>
-              <button onClick={onBack} className="mt-6 text-sm font-semibold px-4 py-2 rounded-xl border" style={{ borderColor: C.border, color: C.navy }}>
-                Voltar ao início
-              </button>
+              {onBack && (
+                <button onClick={onBack} className="mt-6 text-sm font-semibold px-4 py-2 rounded-xl border" style={{ borderColor: C.border, color: C.navy }}>
+                  Voltar ao início
+                </button>
+              )}
             </div>
           )}
         </div>
-        {!enviado && <div className="text-center mt-4"><button onClick={onBack} className="text-xs font-semibold flex items-center gap-1 mx-auto" style={{ color: C.sub }}><ArrowLeft size={12} /> Voltar</button></div>}
+        {!enviado && onBack && <div className="text-center mt-4"><button onClick={onBack} className="text-xs font-semibold flex items-center gap-1 mx-auto" style={{ color: C.sub }}><ArrowLeft size={12} /> Voltar</button></div>}
       </div>
     </div>
   );
@@ -953,7 +962,7 @@ export default function App() {
   const addLink = async (novo) => {
     setSincronizando(true);
     try {
-      const criado = await insertLink({ cliente: novo.cliente, atendente: novo.atendente, tipo: novo.tipo, url: novo.url });
+      const criado = await insertLink({ id: novo.id, cliente: novo.cliente, atendente: novo.atendente, tipo: novo.tipo, url: novo.url });
       setLinks((prev) => [criado, ...prev]);
       return criado;
     } catch (e) {
@@ -979,7 +988,7 @@ export default function App() {
       setLinks((prev) => prev.map((l) => (l.id === pendingSurvey?.id ? { ...l, respondido: true } : l)));
     } catch (e) {
       console.error(e);
-      alert('Não foi possível enviar sua avaliação. Tente novamente.');
+      throw e;
     } finally {
       setSincronizando(false);
     }
@@ -1078,3 +1087,5 @@ export default function App() {
     </div>
   );
 }
+
+export { C, ClickLaudosLogo, ClienteView };
