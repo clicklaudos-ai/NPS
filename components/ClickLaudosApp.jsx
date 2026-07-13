@@ -9,34 +9,14 @@ import {
   Link2, Copy, Check, Send, BarChart3, MessageSquare, Calendar,
   Sparkles, ArrowLeft, ClipboardList, Users, TrendingUp, TrendingDown,
   Search, ExternalLink, AlertCircle, ThumbsUp, Clock, Zap, Frown,
-  Settings2, Pencil, Trash2, X, Lock
+  Settings2, Pencil, Trash2, X, Lock, Mail
 } from 'lucide-react';
 import {
   fetchAll, insertLink, insertResponse, insertAtendente,
   updateAtendente, deleteAtendenteDb, subscribeRealtime,
 } from '../lib/db';
-
-/* ------------------------------------------------------------------ */
-/* Tokens de marca                                                     */
-/* ------------------------------------------------------------------ */
-const C = {
-  navy: '#0A2E52',
-  navy2: '#123A63',
-  blue: '#4FC3E8',
-  blueSoft: '#E8F6FC',
-  blueSoft2: '#D3EFFA',
-  bg: '#F4F8FA',
-  card: '#FFFFFF',
-  border: '#E4EBF0',
-  ink: '#0F1F30',
-  sub: '#5B7186',
-  green: '#22B573',
-  greenSoft: '#E4F8EE',
-  amber: '#F5A623',
-  amberSoft: '#FEF3DF',
-  red: '#E5484D',
-  redSoft: '#FCE7E7',
-};
+import EnvioMassaView from './EnvioMassaView';
+import { C, SENHA_APP } from '../lib/theme';
 
 /* ------------------------------------------------------------------ */
 /* Logo                                                                 */
@@ -103,6 +83,7 @@ function formatDateShort(dateStr) {
 function NavBar({ view, setView, sincronizando }) {
   const items = [
     { id: 'suporte', label: 'Gerador de Link', icon: Link2 },
+    { id: 'campanha', label: 'Envio em massa', icon: Mail },
     { id: 'cliente', label: 'Simulação Cliente', icon: Users },
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
   ];
@@ -972,7 +953,6 @@ function EmptyState({ text }) {
 /* Obs.: os links de pesquisa (/avaliar) enviados ao cliente final NÃO   */
 /* passam por essa tela — só a aplicação interna exige senha.           */
 /* ------------------------------------------------------------------ */
-const SENHA_APP = '9171';
 const CHAVE_SESSAO = 'clicklaudos_autenticado';
 
 function PasswordGate({ onUnlock }) {
@@ -1197,6 +1177,7 @@ export default function App() {
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif' }}>
       <NavBar view={view} setView={handleSetView} sincronizando={sincronizando} />
       {view === 'suporte' && <SuporteView addLink={addLink} goToCliente={goToCliente} atendentes={atendentes} addAtendente={addAtendente} editAtendente={editAtendente} deleteAtendente={deleteAtendente} />}
+      {view === 'campanha' && <EnvioMassaView atendentes={atendentes} />}
       {view === 'cliente' && (
         <ClienteView
           key={survey.id === 'demo' ? 'demo-' + demoTipo : survey.id}
@@ -1211,4 +1192,4 @@ export default function App() {
   );
 }
 
-export { C, ClickLaudosLogo, ClienteView };
+export { C, ClickLaudosLogo, ClienteView, SENHA_APP };

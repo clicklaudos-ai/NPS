@@ -156,3 +156,76 @@ select nome from (values
   ('Bruna Andrade'), ('Felipe Cardoso'), ('Vanessa Lopes'), ('Thiago Moraes'), ('Camila Duarte')
 ) as seed(nome)
 where not exists (select 1 from public.atendentes);
+
+-- =====================================================================
+-- 9. Envio em massa por e-mail (campanhas)
+-- =====================================================================
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'status_envio') then
+    create type status_envio as enum ('pendente', 'enviado', 'falhou');
+  end if;
+end$$;
+
+-- ---------------------------------------------------------------------
+-- 9.1 Tabela: email_campaigns
+-- ---------------------------------------------------------------------
+create table if not exists public.email_campaigns (
+  id               uuid primary key default gen_random_uuid(),
+  nome             text,
+  tipo             tipo_pesquisa not null,
+  atendente_padrao text,
+  criado_em        timestamptz not null default now()
+);
+
+create index if not exists idx_email_campaigns_criado_em on public.email_campaigns (criado_em desc);
+
+-- ---------------------------------------------------------------------
+-- 9.2 Tabela: email_campaign_recipients
+-- ---------------------------------------------------------------------
+create table if not exists public.email_campaign_recipients (
+  id              uuid primary key default gen_random_uuid(),
+  campaign_id     uuid not null references public.email_campaigns(id) on delete cascade,
+  link_id         uuid references public.survey_links(id) on delete set null,
+  cliente         text not null,
+  email           text not null,
+  atendente_nome  text not null default '—',
+  status          status_envio not null default 'pendente',
+  resend_message_id text,
+  erro            text,
+  enviado_em      timestamptz,
+  criado_em       timestamptz not null default now()
+);
+
+create index if not exists idx_campaign_recipients_campaign_id on public.email_campaign_recipients (campaign_id);
+create index if not exists idx_campaign_recipients_status      on public.email_campaign_recipients (status);
+create index if not exists idx_campaign_recipients_email       on public.email_campaign_recipients (email);
+
+-- ---------------------------------------------------------------------
+-- 9.3 Row Level Security (RLS) — mesmo modelo provisório das demais
+--     tabelas (ver aviso na seção 6): liberado para anon/authenticated
+--     até o projeto ganhar Supabase Auth de verdade.
+-- ---------------------------------------------------------------------
+alter table public.email_campaigns           enable row level security;
+alter table public.email_campaign_recipients enable row level security;
+
+drop policy if exists "acesso total campanhas" on public.email_campaigns;
+create policy "acesso total campanhas" on public.email_campaigns
+  for all to anon, authenticated using (true) with check (true);
+
+drop policy if exists "acesso total destinatarios" on public.email_campaign_recipients;
+create policy "acesso total destinatarios" on public.email_campaign_recipients
+  for all to anon, authenticated using (true) with check (true);
+
+-- ---------------------------------------------------------------------
+-- 9.4 Realtime — acompanhar o progresso de uma campanha em outra aba
+-- ---------------------------------------------------------------------
+do $$
+begin
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'email_campaigns') then
+    alter publication supabase_realtime add table public.email_campaigns;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'email_campaign_recipients') then
+    alter publication supabase_realtime add table public.email_campaign_recipients;
+  end if;
+end$$;
