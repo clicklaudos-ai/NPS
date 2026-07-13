@@ -9,14 +9,42 @@ import {
   Link2, Copy, Check, Send, BarChart3, MessageSquare, Calendar,
   Sparkles, ArrowLeft, ClipboardList, Users, TrendingUp, TrendingDown,
   Search, ExternalLink, AlertCircle, ThumbsUp, Clock, Zap, Frown,
-  Settings2, Pencil, Trash2, X, Lock, Mail
+  Settings2, Pencil, Trash2, X, Lock, Mail, Loader2, FileSpreadsheet
 } from 'lucide-react';
 import {
   fetchAll, insertLink, insertResponse, insertAtendente,
   updateAtendente, deleteAtendenteDb, subscribeRealtime,
 } from '../lib/db';
-import EnvioMassaView from './EnvioMassaView';
-import { C, SENHA_APP } from '../lib/theme';
+
+/* ------------------------------------------------------------------ */
+/* Tokens de marca                                                     */
+/* ------------------------------------------------------------------ */
+const C = {
+  navy: '#0A2E52',
+  navy2: '#123A63',
+  blue: '#4FC3E8',
+  blueSoft: '#E8F6FC',
+  blueSoft2: '#D3EFFA',
+  bg: '#F4F8FA',
+  card: '#FFFFFF',
+  border: '#E4EBF0',
+  ink: '#0F1F30',
+  sub: '#5B7186',
+  green: '#22B573',
+  greenSoft: '#E4F8EE',
+  amber: '#F5A623',
+  amberSoft: '#FEF3DF',
+  red: '#E5484D',
+  redSoft: '#FCE7E7',
+};
+
+/* ------------------------------------------------------------------ */
+/* Senha de acesso ao painel interno                                    */
+/* Obs.: os links de pesquisa (/avaliar) enviados ao cliente final NÃO   */
+/* passam por essa senha — só a aplicação interna exige.                */
+/* ------------------------------------------------------------------ */
+const SENHA_APP = '9171';
+const CHAVE_SESSAO = 'clicklaudos_autenticado';
 
 /* ------------------------------------------------------------------ */
 /* Logo                                                                 */
@@ -83,8 +111,7 @@ function formatDateShort(dateStr) {
 function NavBar({ view, setView, sincronizando }) {
   const items = [
     { id: 'suporte', label: 'Gerador de Link', icon: Link2 },
-    { id: 'campanha', label: 'Envio em massa', icon: Mail },
-    { id: 'cliente', label: 'Simulação Cliente', icon: Users },
+    { id: 'disparo', label: 'Disparo NPS', icon: Mail },
     { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
   ];
   return (
@@ -179,7 +206,7 @@ function AtendentesPanel({ atendentes, onEdit, onDelete, onClose }) {
 /* ------------------------------------------------------------------ */
 /* VISÃO 1 — Gerador de Link (Suporte)                                  */
 /* ------------------------------------------------------------------ */
-function SuporteView({ addLink, goToCliente, atendentes, addAtendente, editAtendente, deleteAtendente }) {
+function SuporteView({ addLink, goToCliente, atendentes, addAtendente, editAtendente, deleteAtendente, onSimularCliente }) {
   const [nome, setNome] = useState('');
   const [atendenteId, setAtendenteId] = useState('');
   const [tipo, setTipo] = useState('csat');
@@ -363,6 +390,293 @@ function SuporteView({ addLink, goToCliente, atendentes, addAtendente, editAtend
             </button>
           </div>
           <p className="text-xs mt-3" style={{ color: C.navy2 }}>Envie este link para o cliente via WhatsApp ou e-mail. O botão de simulação é apenas para teste desta demonstração.</p>
+        </div>
+      )}
+
+      <div className="mt-10 pt-5 border-t text-center" style={{ borderColor: C.border }}>
+        <button onClick={onSimularCliente} className="text-xs font-semibold inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border" style={{ borderColor: C.border, color: C.sub }}>
+          <Users size={13} /> Simular tela do cliente (debug)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* VISÃO — Disparo de NPS em massa por e-mail                           */
+/* ------------------------------------------------------------------ */
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const LIMITE_CONTATOS_CSV = 300;
+
+function parseLinhaCSV(linha) {
+  const campos = [];
+  let atual = '';
+  let dentroAspas = false;
+  for (let i = 0; i < linha.length; i++) {
+    const c = linha[i];
+    if (c === '"') {
+      if (dentroAspas && linha[i + 1] === '"') { atual += '"'; i++; }
+      else dentroAspas = !dentroAspas;
+    } else if ((c === ',' || c === ';') && !dentroAspas) {
+      campos.push(atual.trim());
+      atual = '';
+    } else {
+      atual += c;
+    }
+  }
+  campos.push(atual.trim());
+  return campos;
+}
+
+function parseCSV(texto) {
+  const linhas = texto.split(/\r\n|\n|\r/).map((l) => l.trim()).filter((l) => l.length > 0);
+  if (linhas.length === 0) return [];
+
+  const linhasParseadas = linhas.map(parseLinhaCSV);
+
+  const primeira = linhasParseadas[0].map((c) => c.toLowerCase());
+  const idxNomeHeader = primeira.findIndex((c) => ['nome', 'name', 'cliente'].includes(c));
+  const idxEmailHeader = primeira.findIndex((c) => ['email', 'e-mail', 'e_mail'].includes(c));
+  const temCabecalho = idxEmailHeader !== -1;
+
+  const idxNome = temCabecalho ? (idxNomeHeader !== -1 ? idxNomeHeader : 0) : 0;
+  const idxEmail = temCabecalho ? idxEmailHeader : (linhasParseadas[0].length >= 2 ? 1 : 0);
+
+  const dados = temCabecalho ? linhasParseadas.slice(1) : linhasParseadas;
+
+  return dados
+    .map((campos) => ({ nome: (campos[idxNome] || '').trim(), email: (campos[idxEmail] || '').trim() }))
+    .filter((c) => c.nome || c.email);
+}
+
+function DisparoView({ atendentes }) {
+  const [nomeArquivo, setNomeArquivo] = useState('');
+  const [contatosBrutos, setContatosBrutos] = useState([]);
+  const [selecionados, setSelecionados] = useState(new Set());
+  const [atendenteId, setAtendenteId] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [resultados, setResultados] = useState(null);
+  const [erroGeral, setErroGeral] = useState('');
+  const [erroArquivo, setErroArquivo] = useState('');
+
+  const contatosValidosIdx = useMemo(
+    () => contatosBrutos.map((c, i) => (EMAIL_REGEX.test(c.email) ? i : -1)).filter((i) => i !== -1),
+    [contatosBrutos]
+  );
+  const contatosSelecionados = useMemo(
+    () => contatosBrutos.filter((c, i) => selecionados.has(i) && EMAIL_REGEX.test(c.email)),
+    [contatosBrutos, selecionados]
+  );
+  const podeEnviar = contatosSelecionados.length > 0 && atendenteId !== '' && !enviando;
+
+  const limparArquivo = () => {
+    setNomeArquivo('');
+    setContatosBrutos([]);
+    setSelecionados(new Set());
+    setResultados(null);
+    setErroGeral('');
+    setErroArquivo('');
+  };
+
+  const onFileChange = async (e) => {
+    const arquivo = e.target.files?.[0];
+    e.target.value = '';
+    if (!arquivo) return;
+    setResultados(null);
+    setErroGeral('');
+    setErroArquivo('');
+    try {
+      const texto = await arquivo.text();
+      const parsed = parseCSV(texto);
+      if (parsed.length === 0) {
+        setErroArquivo('Não encontramos nenhum contato nesse arquivo. Confira se o CSV tem colunas de nome e e-mail.');
+        return;
+      }
+      if (parsed.length > LIMITE_CONTATOS_CSV) {
+        setErroArquivo(`Esse arquivo tem ${parsed.length} contatos — o limite por disparo é ${LIMITE_CONTATOS_CSV}. Divida em arquivos menores.`);
+        return;
+      }
+      setNomeArquivo(arquivo.name);
+      setContatosBrutos(parsed);
+      setSelecionados(new Set(parsed.map((c, i) => (EMAIL_REGEX.test(c.email) ? i : null)).filter((i) => i !== null)));
+    } catch (err) {
+      setErroArquivo('Não foi possível ler esse arquivo. Confira se é um .csv válido.');
+    }
+  };
+
+  const alternarSelecao = (i) => {
+    setSelecionados((prev) => {
+      const novo = new Set(prev);
+      if (novo.has(i)) novo.delete(i); else novo.add(i);
+      return novo;
+    });
+  };
+
+  const selecionarTodos = () => setSelecionados(new Set(contatosValidosIdx));
+  const selecionarNenhum = () => setSelecionados(new Set());
+
+  const enviar = async () => {
+    if (!podeEnviar) return;
+    setEnviando(true);
+    setErroGeral('');
+    setResultados(null);
+    try {
+      const atendente = atendentes.find((a) => a.id === atendenteId);
+      let senha = null;
+      try { senha = sessionStorage.getItem(CHAVE_SESSAO) === '1' ? SENHA_APP : null; } catch (e) {}
+
+      const resp = await fetch('/api/send-nps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senha,
+          atendente: atendente ? atendente.nome : '—',
+          contatos: contatosSelecionados,
+          origin: window.location.origin,
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        setErroGeral(data.erro || 'Não foi possível enviar as pesquisas.');
+      } else {
+        setResultados(data.resultados);
+      }
+    } catch (e) {
+      setErroGeral('Falha de conexão. Tente novamente.');
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  const enviados = resultados ? resultados.filter((r) => r.status === 'ok').length : 0;
+  const falhas = resultados ? resultados.filter((r) => r.status === 'erro').length : 0;
+
+  return (
+    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-10">
+      <div className="mb-6">
+        <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full mb-3" style={{ background: C.blueSoft, color: C.navy2 }}>
+          <Mail size={12} /> Disparo em massa
+        </div>
+        <h1 className="text-2xl font-extrabold" style={{ color: C.ink }}>Enviar pesquisa NPS por e-mail</h1>
+        <p className="text-sm mt-1" style={{ color: C.sub }}>
+          Anexe um CSV com os clientes (colunas de nome e e-mail) para ver a lista completa,
+          escolher quem recebe e gerar um link individual de pesquisa NPS para cada um.
+        </p>
+      </div>
+
+      <div className="rounded-2xl p-6 shadow-sm border" style={{ background: C.card, borderColor: C.border }}>
+        <div className="space-y-4">
+          {!nomeArquivo ? (
+            <label
+              htmlFor="csv-disparo"
+              className="flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-10 cursor-pointer transition-all hover:opacity-80"
+              style={{ borderColor: C.border, background: C.bg }}
+            >
+              <FileSpreadsheet size={26} style={{ color: C.navy2 }} />
+              <span className="text-sm font-semibold" style={{ color: C.ink }}>Clique para anexar um arquivo CSV</span>
+              <span className="text-xs" style={{ color: C.sub }}>Colunas: nome, e-mail (com ou sem cabeçalho)</span>
+              <input id="csv-disparo" type="file" accept=".csv,text/csv" onChange={onFileChange} className="hidden" />
+            </label>
+          ) : (
+            <div className="flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5" style={{ borderColor: C.border, background: C.bg }}>
+              <FileSpreadsheet size={16} style={{ color: C.navy2 }} className="shrink-0" />
+              <span className="text-sm font-semibold truncate flex-1" style={{ color: C.ink }}>{nomeArquivo}</span>
+              <span className="text-xs shrink-0" style={{ color: C.sub }}>{contatosBrutos.length} linha(s)</span>
+              <button onClick={limparArquivo} className="p-1 rounded-md shrink-0" style={{ color: C.sub }} title="Remover arquivo">
+                <X size={15} />
+              </button>
+            </div>
+          )}
+
+          {erroArquivo && (
+            <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: C.red }}>
+              <AlertCircle size={13} /> {erroArquivo}
+            </div>
+          )}
+
+          {contatosBrutos.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1.5">
+                <label className="text-sm font-semibold" style={{ color: C.ink }}>
+                  Clientes encontrados <span style={{ color: C.sub, fontWeight: 600 }}>({contatosSelecionados.length} selecionado(s))</span>
+                </label>
+                <div className="flex items-center gap-2 text-xs font-bold" style={{ color: C.navy2 }}>
+                  <button onClick={selecionarTodos}>Selecionar todos</button>
+                  <span style={{ color: C.border }}>•</span>
+                  <button onClick={selecionarNenhum}>Limpar seleção</button>
+                </div>
+              </div>
+              <div className="rounded-xl border overflow-hidden" style={{ borderColor: C.border }}>
+                <div className="max-h-72 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {contatosBrutos.map((c, i) => {
+                        const valido = EMAIL_REGEX.test(c.email);
+                        return (
+                          <tr key={i} className="border-t" style={{ borderColor: C.border }}>
+                            <td className="px-3 py-2 w-8">
+                              <input
+                                type="checkbox"
+                                checked={selecionados.has(i)}
+                                disabled={!valido}
+                                onChange={() => alternarSelecao(i)}
+                              />
+                            </td>
+                            <td className="px-2 py-2 font-semibold" style={{ color: C.ink }}>{c.nome || '—'}</td>
+                            <td className="px-2 py-2" style={{ color: valido ? C.sub : C.red }}>
+                              {c.email || '—'}{!valido && ' (e-mail inválido)'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <label className="text-sm font-semibold block mb-1.5" style={{ color: C.ink }}>Atendente / time responsável</label>
+            <select value={atendenteId} onChange={(e) => setAtendenteId(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl border text-sm outline-none focus:ring-2" style={{ borderColor: C.border, background: C.bg, color: atendenteId ? C.ink : C.sub }}>
+              <option value="">Selecione...</option>
+              {atendentes.map((a) => <option key={a.id} value={a.id}>{a.nome}</option>)}
+            </select>
+          </div>
+
+          {erroGeral && (
+            <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: C.red }}>
+              <AlertCircle size={13} /> {erroGeral}
+            </div>
+          )}
+
+          <button onClick={enviar} disabled={!podeEnviar}
+            className="w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all"
+            style={podeEnviar ? { background: C.navy, color: '#fff' } : { background: C.border, color: C.sub, cursor: 'not-allowed' }}>
+            {enviando ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            {enviando ? `Enviando... (${contatosSelecionados.length} contatos)` : `Enviar pesquisa para ${contatosSelecionados.length || '0'} contato(s)`}
+          </button>
+        </div>
+      </div>
+
+      {resultados && (
+        <div className="mt-5 rounded-2xl p-5 border" style={{ background: C.card, borderColor: C.border }}>
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <span className="text-xs font-bold uppercase tracking-wider" style={{ color: C.navy2 }}>Resultado do disparo</span>
+            <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: C.greenSoft, color: C.green }}>{enviados} enviados</span>
+            {falhas > 0 && <span className="text-xs font-bold px-2 py-0.5 rounded-full" style={{ background: C.redSoft, color: C.red }}>{falhas} falharam</span>}
+          </div>
+          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+            {resultados.map((r, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg" style={{ background: C.bg }}>
+                {r.status === 'ok' ? <Check size={13} style={{ color: C.green }} /> : <AlertCircle size={13} style={{ color: C.red }} />}
+                <span className="font-semibold truncate" style={{ color: C.ink }}>{r.nome || r.email}</span>
+                <span className="truncate" style={{ color: C.sub }}>{r.email}</span>
+                {r.status === 'erro' && <span className="ml-auto shrink-0 text-right" style={{ color: C.red }}>{r.mensagem}</span>}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -632,6 +946,10 @@ function DashboardView({ links, responses, atendentes }) {
   const [busca, setBusca] = useState('');
   const [atendenteFiltro, setAtendenteFiltro] = useState('todos');
   const [comentarioAberto, setComentarioAberto] = useState(null);
+  const [buscaDisparo, setBuscaDisparo] = useState('');
+  const [paginaDisparo, setPaginaDisparo] = useState(1);
+
+  useEffect(() => { setPaginaDisparo(1); }, [filtro, custom, atendenteFiltro, buscaDisparo]);
 
   const respostasNoPeriodo = useMemo(() => responses.filter((r) => inRange(r.data, filtro, custom)), [responses, filtro, custom]);
   const linksNoPeriodo = useMemo(() => links.filter((l) => inRange(l.data, filtro, custom)), [links, filtro, custom]);
@@ -676,6 +994,25 @@ function DashboardView({ links, responses, atendentes }) {
 
   const historico = filteredResponses.filter((r) =>
     busca.trim() === '' || r.cliente.toLowerCase().includes(busca.toLowerCase()) || (r.atendente || '').toLowerCase().includes(busca.toLowerCase())
+  );
+
+  // Histórico geral de disparos — todo link gerado (manual ou por e-mail em
+  // massa), de qualquer tipo (CSAT ou NPS).
+  const disparos = filteredLinks.filter((l) =>
+    buscaDisparo.trim() === '' ||
+    l.cliente.toLowerCase().includes(buscaDisparo.toLowerCase()) ||
+    (l.email || '').toLowerCase().includes(buscaDisparo.toLowerCase()) ||
+    (l.atendente || '').toLowerCase().includes(buscaDisparo.toLowerCase())
+  );
+  const disparosPorEmail = disparos.filter((l) => l.canal === 'email').length;
+  const disparosRespondidos = disparos.filter((l) => l.respondido).length;
+
+  const ITENS_POR_PAGINA_DISPARO = 10;
+  const totalPaginasDisparo = Math.max(1, Math.ceil(disparos.length / ITENS_POR_PAGINA_DISPARO));
+  const paginaDisparoAtual = Math.min(paginaDisparo, totalPaginasDisparo);
+  const disparosPaginados = disparos.slice(
+    (paginaDisparoAtual - 1) * ITENS_POR_PAGINA_DISPARO,
+    paginaDisparoAtual * ITENS_POR_PAGINA_DISPARO
   );
 
   // Desempenho por atendente (sempre considera todos os atendentes, respeitando só o período)
@@ -847,6 +1184,87 @@ function DashboardView({ links, responses, atendentes }) {
         ) : <EmptyState text="Sem comentários suficientes no período para gerar insights." />}
       </div>
 
+      <div className="rounded-2xl border p-5 mb-6" style={{ background: C.card, borderColor: C.border }}>
+        <div className="flex items-center justify-between mb-1 gap-3 flex-wrap">
+          <div className="flex items-center gap-2">
+            <Send size={16} style={{ color: C.navy }} />
+            <h3 className="text-sm font-bold" style={{ color: C.ink }}>Histórico de disparos</h3>
+            <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ background: C.blueSoft, color: C.navy2 }}>{disparos.length}</span>
+          </div>
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border" style={{ borderColor: C.border, background: C.bg }}>
+            <Search size={13} style={{ color: C.sub }} />
+            <input value={buscaDisparo} onChange={(e) => setBuscaDisparo(e.target.value)} placeholder="Buscar cliente, e-mail ou atendente"
+              className="text-xs bg-transparent outline-none w-44" />
+          </div>
+        </div>
+        <p className="text-xs mb-4" style={{ color: C.sub }}>
+          Todo link gerado, manual ou em disparo por e-mail • {disparosPorEmail} por e-mail • {disparosRespondidos} respondido(s)
+        </p>
+        {disparos.length ? (
+          <>
+            <div className="overflow-x-auto -mx-1">
+              <table className="w-full text-xs min-w-[620px]">
+                <thead>
+                  <tr style={{ color: C.sub }} className="text-left">
+                    <th className="font-semibold px-2 py-2">Dia/hora</th>
+                    <th className="font-semibold px-2 py-2">Cliente</th>
+                    <th className="font-semibold px-2 py-2">E-mail</th>
+                    <th className="font-semibold px-2 py-2">Atendente</th>
+                    <th className="font-semibold px-2 py-2">Tipo</th>
+                    <th className="font-semibold px-2 py-2">Canal</th>
+                    <th className="font-semibold px-2 py-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {disparosPaginados.map((l) => (
+                    <tr key={l.id} className="border-t" style={{ borderColor: C.border }}>
+                      <td className="px-2 py-2.5 whitespace-nowrap" style={{ color: C.sub }}>{formatDate(l.data)}</td>
+                      <td className="px-2 py-2.5 font-semibold" style={{ color: C.ink }}>{l.cliente}</td>
+                      <td className="px-2 py-2.5" style={{ color: C.sub }}>{l.email || '—'}</td>
+                      <td className="px-2 py-2.5" style={{ color: C.sub }}>{l.atendente}</td>
+                      <td className="px-2 py-2.5">
+                        <span className="px-2 py-0.5 rounded-full font-bold text-[10px] uppercase" style={{ background: l.tipo === 'csat' ? C.blueSoft : C.greenSoft, color: l.tipo === 'csat' ? C.navy2 : C.green }}>{l.tipo}</span>
+                      </td>
+                      <td className="px-2 py-2.5" style={{ color: C.sub }}>{l.canal === 'email' ? 'E-mail' : 'Manual'}</td>
+                      <td className="px-2 py-2.5">
+                        {l.respondido ? (
+                          <span className="px-2 py-0.5 rounded-full font-bold text-[10px] uppercase" style={{ background: C.greenSoft, color: C.green }}>Respondido</span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full font-bold text-[10px] uppercase" style={{ background: C.bg, color: C.sub }}>Sem resposta</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-between mt-3.5 flex-wrap gap-2">
+              <span className="text-xs" style={{ color: C.sub }}>
+                Página {paginaDisparoAtual} de {totalPaginasDisparo} • {disparos.length} disparo(s)
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setPaginaDisparo((p) => Math.max(1, p - 1))}
+                  disabled={paginaDisparoAtual === 1}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold border"
+                  style={paginaDisparoAtual === 1 ? { borderColor: C.border, color: C.border, cursor: 'not-allowed' } : { borderColor: C.border, color: C.ink }}
+                >
+                  Anterior
+                </button>
+                <button
+                  onClick={() => setPaginaDisparo((p) => Math.min(totalPaginasDisparo, p + 1))}
+                  disabled={paginaDisparoAtual === totalPaginasDisparo}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold border"
+                  style={paginaDisparoAtual === totalPaginasDisparo ? { borderColor: C.border, color: C.border, cursor: 'not-allowed' } : { borderColor: C.border, color: C.ink }}
+                >
+                  Próxima
+                </button>
+              </div>
+            </div>
+          </>
+        ) : <EmptyState text="Nenhum link gerado no período." />}
+      </div>
+
       <div className="rounded-2xl border p-5" style={{ background: C.card, borderColor: C.border }}>
         <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <div className="flex items-center gap-2">
@@ -953,8 +1371,6 @@ function EmptyState({ text }) {
 /* Obs.: os links de pesquisa (/avaliar) enviados ao cliente final NÃO   */
 /* passam por essa tela — só a aplicação interna exige senha.           */
 /* ------------------------------------------------------------------ */
-const CHAVE_SESSAO = 'clicklaudos_autenticado';
-
 function PasswordGate({ onUnlock }) {
   const [senha, setSenha] = useState('');
   const [erro, setErro] = useState(false);
@@ -1176,20 +1592,22 @@ export default function App() {
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: 'ui-sans-serif, system-ui, -apple-system, sans-serif' }}>
       <NavBar view={view} setView={handleSetView} sincronizando={sincronizando} />
-      {view === 'suporte' && <SuporteView addLink={addLink} goToCliente={goToCliente} atendentes={atendentes} addAtendente={addAtendente} editAtendente={editAtendente} deleteAtendente={deleteAtendente} />}
-      {view === 'campanha' && <EnvioMassaView atendentes={atendentes} />}
-      {view === 'cliente' && (
-        <ClienteView
-          key={survey.id === 'demo' ? 'demo-' + demoTipo : survey.id}
-          survey={survey}
-          onSubmit={addResponse}
-          onBack={() => { setPendingSurvey(null); setView('suporte'); }}
-          onChangeDemoTipo={survey.id === 'demo' ? setDemoTipo : undefined}
-        />
-      )}
-      {view === 'dashboard' && <DashboardView links={links} responses={responses} atendentes={atendentes} />}
+      <div key={view} className="view-transition">
+        {view === 'suporte' && <SuporteView addLink={addLink} goToCliente={goToCliente} atendentes={atendentes} addAtendente={addAtendente} editAtendente={editAtendente} deleteAtendente={deleteAtendente} onSimularCliente={() => handleSetView('cliente')} />}
+        {view === 'disparo' && <DisparoView atendentes={atendentes} />}
+        {view === 'cliente' && (
+          <ClienteView
+            key={survey.id === 'demo' ? 'demo-' + demoTipo : survey.id}
+            survey={survey}
+            onSubmit={addResponse}
+            onBack={() => { setPendingSurvey(null); setView('suporte'); }}
+            onChangeDemoTipo={survey.id === 'demo' ? setDemoTipo : undefined}
+          />
+        )}
+        {view === 'dashboard' && <DashboardView links={links} responses={responses} atendentes={atendentes} />}
+      </div>
     </div>
   );
 }
 
-export { C, ClickLaudosLogo, ClienteView, SENHA_APP };
+export { C, ClickLaudosLogo, ClienteView };
