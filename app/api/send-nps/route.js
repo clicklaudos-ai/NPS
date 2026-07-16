@@ -68,7 +68,8 @@ export async function POST(req) {
   }
 
   const baseUrl = (origin && String(origin).replace(/\/$/, '')) || req.nextUrl.origin;
-  const remetente = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+  const enderecoRemetente = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+  const remetente = `Pesquisa ClickLaudos <${enderecoRemetente}>`;
   const resend = new Resend(process.env.RESEND_API_KEY);
 
   const resultados = [];
